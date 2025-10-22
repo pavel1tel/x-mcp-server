@@ -60,6 +60,60 @@ async function uploadImage(client: TwitterApi, imagePath: string): Promise<strin
   return await client.v1.uploadMedia(imageBuffer, { mimeType });
 }
 
+// Helper function to upload video with chunked upload
+async function uploadVideo(client: TwitterApi, videoPath: string): Promise<string> {
+  // Sanitize path to prevent directory traversal
+  const sanitizedPath = resolve(videoPath);
+
+  // Validate file exists and get stats
+  let fileStats;
+  try {
+    fileStats = await stat(sanitizedPath);
+  } catch (error) {
+    throw new Error(`File not found: ${basename(sanitizedPath)}`);
+  }
+
+  // Check if it's a file (not a directory)
+  if (!fileStats.isFile()) {
+    throw new Error(`Path is not a file: ${basename(sanitizedPath)}`);
+  }
+
+  // Twitter video size limit is 512MB
+  const MAX_SIZE = 512 * 1024 * 1024; // 512MB in bytes
+  if (fileStats.size > MAX_SIZE) {
+    throw new Error(`Video size exceeds 512MB limit (${(fileStats.size / 1024 / 1024).toFixed(2)}MB)`);
+  }
+
+  // Detect mime type from file extension
+  const ext = sanitizedPath.toLowerCase().split('.').pop();
+  const mimeTypes: { [key: string]: string } = {
+    'mp4': 'video/mp4',
+    'mov': 'video/quicktime',
+    'avi': 'video/x-msvideo',
+    'webm': 'video/webm',
+    'm4v': 'video/x-m4v'
+  };
+
+  // Validate supported format
+  if (!ext || !mimeTypes[ext]) {
+    const supported = Object.keys(mimeTypes).join(', ');
+    throw new Error(`Unsupported video format. Supported formats: ${supported}`);
+  }
+
+  const mimeType = mimeTypes[ext];
+
+  // Read video file
+  const videoBuffer = await readFile(sanitizedPath);
+
+  // Upload video using chunked upload
+  return await client.v1.uploadMedia(videoBuffer, {
+    mimeType,
+    target: 'tweet',
+    additionalOwners: undefined,
+    longVideo: fileStats.size > 15 * 1024 * 1024 // Use long video for files > 15MB
+  });
+}
+
 // Track rate limit reset times
 const rateLimitResets: { [key: string]: number } = {
   'home': 0,
@@ -151,7 +205,7 @@ class XMcpServer {
         },
         {
           name: 'create_tweet',
-          description: 'Create a new tweet with optional image attachment',
+          description: 'Create a new tweet with optional image or video attachment',
           inputSchema: {
             type: 'object',
             properties: {
@@ -164,13 +218,17 @@ class XMcpServer {
                 type: 'string',
                 description: 'Optional absolute path to an image file to attach (PNG, JPEG, GIF, WEBP)',
               },
+              video_path: {
+                type: 'string',
+                description: 'Optional absolute path to a video file to attach (MP4, MOV, AVI, WEBM, M4V). Max 512MB. Cannot be used with image_path.',
+              },
             },
             required: ['text'],
           },
         },
         {
           name: 'reply_to_tweet',
-          description: 'Reply to a tweet with optional image attachment',
+          description: 'Reply to a tweet with optional image or video attachment',
           inputSchema: {
             type: 'object',
             properties: {
@@ -186,6 +244,10 @@ class XMcpServer {
               image_path: {
                 type: 'string',
                 description: 'Optional absolute path to an image file to attach (PNG, JPEG, GIF, WEBP)',
+              },
+              video_path: {
+                type: 'string',
+                description: 'Optional absolute path to a video file to attach (MP4, MOV, AVI, WEBM, M4V). Max 512MB. Cannot be used with image_path.',
               },
             },
             required: ['tweet_id', 'text'],
@@ -231,10 +293,19 @@ class XMcpServer {
           }
 
           case 'create_tweet': {
-            const { text, image_path } = request.params.arguments as {
+            const { text, image_path, video_path } = request.params.arguments as {
               text: string;
               image_path?: string;
+              video_path?: string;
             };
+
+            // Validate that both image and video aren't provided
+            if (image_path && video_path) {
+              throw new McpError(
+                ErrorCode.InvalidRequest,
+                'Cannot attach both image and video to the same tweet. Please provide only one.'
+              );
+            }
 
             let mediaId: string | undefined;
 
@@ -246,6 +317,18 @@ class XMcpServer {
                 throw new McpError(
                   ErrorCode.InvalidRequest,
                   `Failed to upload image: ${(error as Error).message}`
+                );
+              }
+            }
+
+            // Upload video if video_path is provided
+            if (video_path) {
+              try {
+                mediaId = await uploadVideo(client, video_path);
+              } catch (error) {
+                throw new McpError(
+                  ErrorCode.InvalidRequest,
+                  `Failed to upload video: ${(error as Error).message}`
                 );
               }
             }
@@ -267,11 +350,20 @@ class XMcpServer {
           }
 
           case 'reply_to_tweet': {
-            const { tweet_id, text, image_path } = request.params.arguments as {
+            const { tweet_id, text, image_path, video_path } = request.params.arguments as {
               tweet_id: string;
               text: string;
               image_path?: string;
+              video_path?: string;
             };
+
+            // Validate that both image and video aren't provided
+            if (image_path && video_path) {
+              throw new McpError(
+                ErrorCode.InvalidRequest,
+                'Cannot attach both image and video to the same reply. Please provide only one.'
+              );
+            }
 
             let mediaId: string | undefined;
 
@@ -283,6 +375,18 @@ class XMcpServer {
                 throw new McpError(
                   ErrorCode.InvalidRequest,
                   `Failed to upload image: ${(error as Error).message}`
+                );
+              }
+            }
+
+            // Upload video if video_path is provided
+            if (video_path) {
+              try {
+                mediaId = await uploadVideo(client, video_path);
+              } catch (error) {
+                throw new McpError(
+                  ErrorCode.InvalidRequest,
+                  `Failed to upload video: ${(error as Error).message}`
                 );
               }
             }
