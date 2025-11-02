@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import express, { Request, Response } from 'express';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -444,7 +446,58 @@ class XMcpServer {
     await this.server.connect(transport);
     console.error('X MCP server running on stdio');
   }
+
+  async runHttp() {
+    const app = express();
+    app.use(express.json());
+
+    app.post('/mcp', async (req: Request, res: Response) => {
+      // In stateless mode, create a new transport for each request to prevent
+      // request ID collisions. Different clients may use the same JSON-RPC request IDs,
+      // which would cause responses to be routed to the wrong HTTP connections if
+      // the transport state is shared.
+      try {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true
+        });
+
+        res.on('close', () => {
+          transport.close();
+        });
+
+        await this.server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        console.error('Error handling MCP request:', error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error'
+            },
+            id: null
+          });
+        }
+      }
+    });
+
+    const port = parseInt(process.env.PORT || '3000');
+    app.listen(port, () => {
+      console.log(`MCP Server running on http://localhost:${port}/mcp`);
+    }).on('error', (error: Error) => {
+      console.error('Server error:', error);
+      process.exit(1);
+    });
+  }
 }
 
 const server = new XMcpServer();
-server.run().catch(console.error);
+
+// If PORT environment variable is set, run HTTP server, otherwise run stdio
+if (process.env.PORT) {
+  server.runHttp().catch(console.error);
+} else {
+  server.run().catch(console.error);
+}
