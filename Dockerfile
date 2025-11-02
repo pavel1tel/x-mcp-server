@@ -16,11 +16,11 @@ ENV TWITTER_ACCESS_TOKEN=${TWITTER_ACCESS_TOKEN}
 ENV TWITTER_ACCESS_SECRET=${TWITTER_ACCESS_SECRET}
 ENV PORT=${PORT}
 
-# Copy package files
-COPY package.json package-lock.json ./
+# Copy package files (package-lock.json is in .gitignore, so we'll use npm install)
+COPY package.json ./
 
 # Install all dependencies (including dev dependencies for build)
-RUN npm ci && npm cache clean --force
+RUN npm install && npm cache clean --force
 
 # Copy source files
 COPY tsconfig.json ./
