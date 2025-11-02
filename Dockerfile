@@ -17,17 +17,17 @@ ENV TWITTER_ACCESS_SECRET=${TWITTER_ACCESS_SECRET}
 ENV PORT=${PORT}
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 
-# Install dependencies
+# Install all dependencies (including dev dependencies for build)
 RUN npm ci && npm cache clean --force
 
 # Copy source files
 COPY tsconfig.json ./
 COPY src ./src
 
-# Install dev dependencies for build and build TypeScript
-RUN npm ci && npm run build && rm -rf node_modules && npm ci
+# Build TypeScript
+RUN npm run build
 
 # Expose the port
 EXPOSE ${PORT}
