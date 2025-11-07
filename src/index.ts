@@ -451,7 +451,7 @@ class XMcpServer {
     const app = express();
     app.use(express.json());
 
-    app.post('/mcp', async (req: Request, res: Response) => {
+    app.all('/mcp', async (req: Request, res: Response) => {
       // In stateless mode, create a new transport for each request to prevent
       // request ID collisions. Different clients may use the same JSON-RPC request IDs,
       // which would cause responses to be routed to the wrong HTTP connections if
